@@ -12,47 +12,50 @@ import asyncio
 import threading
 from flask import Flask
 import os
-import aiohttp
 
-# ======================= STATES =======================
 class Register(StatesGroup):
     name = State()
     location = State()
     phone = State()
 
-# ======================= BOT SETUP =======================
+
 API_TOKEN = BOT_TOKEN
 
 logging.basicConfig(level=logging.INFO)
 
 storage = MemoryStorage()
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 
-# ======================= HANDLERS =======================
+
 @dp.message_handler(commands=['start', 'help'])
 async def send_welcome(message: types.Message):
     await Register.name.set()
     await message.reply(
         f"Assalomu Alaykum, <b>{message.from_user.full_name} 😊</b>!\n"
         "Bizning Rahimov School botiga xush kelibsiz! 👏\n"
-        "<i>Autizm haqidagi qo'llanmani olish 3 qadam qoldi. 1-qadam: ismingizni yozing:</i>\n\n"
+        "<i> Autizm haqidagi qo'llanmani olish 3 qadam qoldi. 1-qadam: ismingizni yozing: </i>\n\n"
         "Ismingizni kiriting:",
         parse_mode="HTML"
     )
 
+
 @dp.message_handler(state=Register.name)
 async def process_name(message: types.Message, state: FSMContext):
     name = message.text.strip()
+    
     if not name.replace(" ", "").isalpha() or len(name) < 2:
         await message.reply("❌ Iltimos, to'g'ri ism kiriting (faqat harflardan iborat bo'lsin)")
         return
+    
     await state.update_data(name=name)
     await Register.location.set()
     await message.reply(
         "Toshkent shahrining qaysi tumanida yashaysiz? (Bunga variantlar chiqishi kerak)",
         reply_markup=toshkent_tumanlari
     )
+
 
 @dp.message_handler(state=Register.location)
 async def process_location(message: types.Message, state: FSMContext):
@@ -71,28 +74,38 @@ async def process_location(message: types.Message, state: FSMContext):
         reply_markup=contact_button
     )
 
+
 @dp.message_handler(content_types=['contact', 'text'], state=Register.phone)
 async def process_phone(message: types.Message, state: FSMContext):
     phone = ""
+    
     if message.contact:
         phone = message.contact.phone_number
     else:
         phone = message.text
+        
         if phone == "Raqamni qo'lda kiritish":
             await message.reply(
-                "Telefon raqamingizni kiriting:\nNamuna: +998901234567 yoki 901234567",
+                "Telefon raqamingizni kiriting:\n"
+                "Namuna: +998901234567 yoki 901234567",
                 reply_markup=types.ReplyKeyboardRemove()
             )
             return
         
+
         phone_digits = re.sub(r'\D', '', phone)
+        
+
         if len(phone_digits) == 9:
+
             phone = f"+998{phone_digits}"
         elif len(phone_digits) == 12 and phone_digits.startswith('998'):
+
             phone = f"+{phone_digits}"
         elif len(phone_digits) == 13 and phone.startswith('+'):
             phone = f"+{phone_digits}"
         elif len(phone_digits) == 10 and phone_digits.startswith('8'):
+
             phone = f"+7{phone_digits[1:]}"
         else:
             await message.reply(
@@ -115,6 +128,7 @@ async def process_phone(message: types.Message, state: FSMContext):
         f"📍 <b>Tuman:</b> {location}\n"
         f"📱 <b>Telefon:</b> {phone}\n"
         f"🆔 <b>User ID:</b> {message.from_user.id}\n"
+       
         f"📛 <b>To'liq ism:</b> {message.from_user.full_name}\n"
         f"📅 <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         f"#yangi_royhat"
@@ -142,53 +156,58 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is None:
         return
+    
     await state.finish()
     await message.reply(
-        "❌ Ro'yhatdan o'tish bekor qilindi.\nQaytadan boshlash uchun /start ni bosing.",
+        "❌ Ro'yhatdan o'tish bekor qilindi.\n"
+        "Qaytadan boshlash uchun /start ni bosing.",
         reply_markup=types.ReplyKeyboardRemove()
     )
 
+
+
 @dp.message_handler(state='*')
 async def handle_all_messages(message: types.Message):
+    """Barcha kutilmagan xabarlar uchun"""
     await message.reply(
-        "❌ Iltimos, kerakli amalni bajaring.\n\nYordam olish uchun /help ni bosing.\nQayta boshlash uchun /restart ni bosing."
+        "❌ Iltimos, kerakli amalni bajaring.\n\n"
+        "Yordam olish uchun /help ni bosing.\n"
+        "Qayta boshlash uchun /restart ni bosing."
     )
 
-# ======================= FLASK SERVER =======================
+# ========== RENDER UCHUN ==========
+
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot ishlayapti!"
+    return "✅ Rahimov School Bot ishlamoqda!"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+# Botni ishga tushirish uchun funksiya
+def run_bot():
+    """Bot'ni alohida event loop bilan ishga tushirish"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(executor.start_polling(dp, skip_updates=True))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        loop.close()
 
 def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    """Flask server'ni ishga tushirish"""
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
 
-# =================== INTERNAL PING ===================
-async def keep_alive_ping():
-    url = os.environ.get("RENDER_EXTERNAL_URL", "http://127.0.0.1:5000")
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    print(f"Ping: {resp.status}")
-        except Exception as e:
-            print(f"Ping xatoligi: {e}")
-        await asyncio.sleep(600)  # har 10 daqiqa
-
-# =================== BOT START ===================
-async def start_bot():
-    asyncio.create_task(keep_alive_ping())  # pingni ishga tushirish
-    executor.start_polling(dp, skip_updates=True)
-
-# =================== MAIN ===================
-if __name__ == "__main__":
-    # Flask server
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
+if __name__ == '__main__':
+    # Botni alohida thread'da ishga tushirish
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
     
-    # Aiogram bot (allaqachon mavjud loop ichida)
-    loop = asyncio.get_event_loop()
-    loop.create_task(start_bot())
-    loop.run_forever()
+    # Flask server'ni asosiy thread'da ishga tushirish
+    run_flask()
