@@ -8,6 +8,10 @@ from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from buttons import toshkent_tumanlari
 from datetime import datetime
 import re
+import asyncio
+import threading
+from flask import Flask
+import os
 
 class Register(StatesGroup):
     name = State()
@@ -169,20 +173,31 @@ async def handle_all_messages(message: types.Message):
         "Qayta boshlash uchun /restart ni bosing."
     )
 
+# ========== RENDER UCHUN ==========
 
-from flask import Flask
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Bot is running!"
 
+def run_flask():
+    """Flask server'ni ishga tushirish"""
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+
+def run_bot():
+    """Aiogram bot'ni ishga tushirish"""
+    asyncio.run(start_bot())
+
+async def start_bot():
+    """Bot'ni asyncio orqali ishga tushirish"""
+    await executor.start_polling(dp, skip_updates=True)
+
 if __name__ == '__main__':
-    import threading
+    # Flask server'ni thread'da ishga tushirish
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     
-    # Botni alohida thread'da ishga tushirish
-    bot_thread = threading.Thread(target=lambda: executor.start_polling(dp, skip_updates=True))
-    bot_thread.start()
-    
-    # Flask server'ni asosiy thread'da ishga tushirish
-    app.run(host='0.0.0.0', port=5000)
+    # Asosiy thread'da bot'ni ishga tushirish
+    run_bot()
