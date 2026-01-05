@@ -31,7 +31,7 @@ async def send_welcome(message: types.Message):
     await message.reply(
         f"Assalomu Alaykum, <b>{message.from_user.full_name} 😊</b>!\n"
         "Bizning Rahimov School botiga xush kelibsiz! 👏\n"
-        "<i> Autizm haqidagi qo’llanmani olish 3 qadam qoldi. 1-qadam: ismingizni yozing: </i>\n\n"
+        "<i> Autizm haqidagi qo'llanmani olish 3 qadam qoldi. 1-qadam: ismingizni yozing: </i>\n\n"
         "Ismingizni kiriting:",
         parse_mode="HTML"
     )
@@ -119,7 +119,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     location = data.get('location')
 
     admin_message = (
-        f"🎯 <b>Qaytadan ro’yxatdan o’tish:</b>\n\n"
+        f"🎯 <b>Qaytadan ro'yxatdan o'tish:</b>\n\n"
         f"👤 <b>Ism:</b> {user_name}\n"
         f"📍 <b>Tuman:</b> {location}\n"
         f"📱 <b>Telefon:</b> {phone}\n"
@@ -144,7 +144,7 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     await message.reply_document(
         document=open("Autizm.pdf", "rb"),
-        caption="Siz muvaffaqiyatli ro’yxatdan o’tdingiz. Marhamat, autizm haqidagi maxsus qo’llanma: \n"
+        caption="Siz muvaffaqiyatli ro'yxatdan o'tdingiz. Marhamat, autizm haqidagi maxsus qo'llanma: \n"
     )
 
 @dp.message_handler(commands=['cancel'], state='*')
@@ -160,9 +160,29 @@ async def cancel_handler(message: types.Message, state: FSMContext):
         reply_markup=types.ReplyKeyboardRemove()
     )
 
+@dp.message_handler(state='*')
+async def handle_all_messages(message: types.Message):
+    """Barcha kutilmagan xabarlar uchun"""
+    await message.reply(
+        "❌ Iltimos, kerakli amalni bajaring.\n\n"
+        "Yordam olish uchun /help ni bosing.\n"
+        "Qayta boshlash uchun /restart ni bosing."
+    )
+
+
+from flask import Flask
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
 
 if __name__ == '__main__':
-    try:
-        executor.start_polling(dp, skip_updates=True)
-    except Exception as e:
-        print(f"❌ Xatolik yuz berdi: {e}")
+    import threading
+    
+    # Botni alohida thread'da ishga tushirish
+    bot_thread = threading.Thread(target=lambda: executor.start_polling(dp, skip_updates=True))
+    bot_thread.start()
+    
+    # Flask server'ni asosiy thread'da ishga tushirish
+    app.run(host='0.0.0.0', port=5000)
