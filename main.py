@@ -18,7 +18,7 @@ from google.oauth2.service_account import Credentials
 from google.auth.exceptions import GoogleAuthError
 
 # ======================= CONFIG IMPORT =======================
-from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR, setup_google_credentials
+from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR
 from buttons import toshkent_tumanlari, phone_keyboard, cancel_keyboard
 
 # ======================= LOGGING =======================
