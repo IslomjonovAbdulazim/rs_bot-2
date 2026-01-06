@@ -1,26 +1,33 @@
 import logging
 import asyncio
-import threading
-import re
 import os
 from datetime import datetime
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, executor
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.utils import exceptions
-from flask import Flask
-import aiohttp
+from aiohttp import web
 import gspread
 from google.oauth2.service_account import Credentials
 from google.auth.exceptions import GoogleAuthError
+import re
 
 # ======================= CONFIG =======================
 from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR
-from buttons import toshkent_tumanlari  # Toshkent tumanlari uchun reply keyboard
+from buttons import toshkent_tumanlari
 
 API_TOKEN = BOT_TOKEN
+
+# Render webhook sozlamalari
+WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+WEBHOOK_PATH = f"/webhook/{API_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+# Web server sozlamalari
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.environ.get("PORT", 5000))
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,7 +41,6 @@ class GoogleSheetsManager:
     def connect(self):
         """Google Sheets ga ulanish"""
         try:
-            # Scope larni aniqlash
             scope = [
                 'https://spreadsheets.google.com/feeds',
                 'https://www.googleapis.com/auth/spreadsheets',
@@ -42,39 +48,31 @@ class GoogleSheetsManager:
                 'https://www.googleapis.com/auth/drive'
             ]
             
-            # Credentials faylini tekshirish
             if not os.path.exists(CREDENTIALS_FILE):
                 logging.error(f"❌ Credentials fayli topilmadi: {CREDENTIALS_FILE}")
                 return False
             
-            # Autentifikatsiya
             creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
             client = gspread.authorize(creds)
             
-            # Spreadsheet ni ochish yoki yaratish
             try:
                 self.sheet = client.open(SPREADSHEET_NAME)
             except gspread.SpreadsheetNotFound:
-                # Yangi spreadsheet yaratish
                 self.sheet = client.create(SPREADSHEET_NAME)
-                # Foydalanish uchun ochish
                 self.sheet.share('', perm_type='anyone', role='writer')
                 logging.info(f"✅ Yangi spreadsheet yaratildi: {SPREADSHEET_NAME}")
             
-            # Worksheet ni tekshirish yoki yaratish
             try:
                 self.worksheet = self.sheet.get_worksheet(0)
             except:
                 self.worksheet = self.sheet.add_worksheet(title="Foydalanuvchilar", rows=1000, cols=20)
             
-            # Agar bo'sh bo'lsa, headerlar qo'shish
             if not self.worksheet.get('A1'):
                 headers = [
                     ['№', 'Ism', 'Tuman', 'Telefon', 'User ID', 'To\'liq Ism', 
                      'Username', 'Ro\'yxatdan o\'tgan sana', 'Vaqt', 'Status']
                 ]
                 self.worksheet.update('A1:J1', headers)
-                # Headerlarga format berish
                 self.worksheet.format('A1:J1', {
                     "backgroundColor": {"red": 0.29, "green": 0.53, "blue": 0.91},
                     "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
@@ -100,13 +98,11 @@ class GoogleSheetsManager:
             return False
         
         try:
-            # Oxirgi qatorni topish
             all_values = self.worksheet.get_all_values()
             next_row = len(all_values) + 1
             
-            # Ma'lumotlarni tayyorlash
             row_data = [
-                next_row - 1,  # № (header hisobga olinmagan)
+                next_row - 1,
                 user_data['name'],
                 user_data['location'],
                 user_data['phone'],
@@ -118,10 +114,8 @@ class GoogleSheetsManager:
                 "✅ Ro'yxatdan o'tgan"
             ]
             
-            # Ma'lumotlarni yozish
             self.worksheet.update(f'A{next_row}:J{next_row}', [row_data])
             
-            # Muvaffaqiyatli qatorga format berish
             self.worksheet.format(f'A{next_row}:J{next_row}', {
                 "backgroundColor": {"red": 0.58, "green": 0.77, "blue": 0.49},
                 "textFormat": {"bold": False}
@@ -134,7 +128,6 @@ class GoogleSheetsManager:
             logging.error(f"❌ Google Sheets ga yozishda xatolik: {e}")
             return False
 
-# Google Sheets managerini yaratish
 gs_manager = GoogleSheetsManager()
 
 # ======================= STATES =======================
@@ -152,9 +145,7 @@ dp = Dispatcher(bot, storage=storage)
 
 @dp.message_handler(commands=['start', 'help'])
 async def send_welcome(message: types.Message):
-    # Adminlar uchun alohida xabar
     if message.from_user.id in ADMINS:
-        # Admin uchun state ni tozalash
         current_state = await dp.current_state(user=message.from_user.id).get_state()
         if current_state:
             await dp.current_state(user=message.from_user.id).finish()
@@ -165,16 +156,13 @@ async def send_welcome(message: types.Message):
             f"📁 /export - Google Sheets havolasi\n",
             parse_mode="HTML"
         )
-        # ADMIN uchun state O'RNATILMAYDI
     else:
-        # Oddiy foydalanuvchilar uchun
         await message.reply(
             f"Assalomu Alaykum, <b>{message.from_user.full_name}</b> 😊\n"
             "Autizm haqidagi qo'llanmani olish uchun 3 qadam qoldi 🤩 \n\n<b>1-qadam:</b>\n"
             "Ismingizni kiriting:",
             parse_mode="HTML"
         )
-        # State ni to'g'ri o'rnatish (faqat oddiy foydalanuvchilar uchun)
         await Register.name.set()
 
 @dp.message_handler(state=Register.name)
@@ -215,7 +203,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     phone = ""
     if message.contact:
         phone = message.contact.phone_number
-        # Ozbekiston raqamini formatlash
         if phone.startswith('+'):
             phone = phone
         elif phone.startswith('998'):
@@ -234,7 +221,6 @@ async def process_phone(message: types.Message, state: FSMContext):
             )
             return
         
-        # Raqamni tozalash va formatlash
         phone_digits = re.sub(r'\D', '', phone_text)
         
         if len(phone_digits) == 9:
@@ -262,7 +248,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     user_name = data.get('name')
     location = data.get('location')
     
-    # User data for Google Sheets
     user_data = {
         "name": user_name,
         "location": location,
@@ -272,10 +257,8 @@ async def process_phone(message: types.Message, state: FSMContext):
         "username": message.from_user.username if message.from_user.username else '',
     }
 
-    # Google Sheets ga yozish
     gs_success = gs_manager.add_user(user_data)
     
-    # Admin xabari
     admin_message = (
         f"🎯 <b>Yangi ro'yxatdan o'tish:</b>\n\n"
         f"👤 <b>Ism:</b> {user_name}\n"
@@ -292,7 +275,6 @@ async def process_phone(message: types.Message, state: FSMContext):
     if not gs_success:
         admin_message += "\n\n⚠️ <b>Google Sheets ga saqlanmadi!</b>"
     
-    # Adminlarga xabar yuborish
     if ADMINS:
         for admin_id in ADMINS:
             try:
@@ -302,14 +284,12 @@ async def process_phone(message: types.Message, state: FSMContext):
     
     await state.finish()
     
-    # Foydalanuvchiga javob
     success_message = "✅ Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\n"
     if not gs_success:
         success_message += "⚠️ <i>Ma'lumotlaringiz saqlanmadi. Admin bilan bog'laning.</i>\n\n"
     
     success_message += "📚 Marhamat, autizm haqidagi maxsus qo'llanma:"
     
-    # PDF faylni yuborish
     try:
         await message.reply(success_message, parse_mode="HTML")
         await message.reply_document(
@@ -332,14 +312,12 @@ async def process_phone(message: types.Message, state: FSMContext):
 # ======================= ADMIN KOMANDALARI =======================
 @dp.message_handler(commands=['admin'], user_id=ADMINS)
 async def admin_panel(message: types.Message):
-    """Admin panel"""
     await message.reply(
         f"👋 <b>Xush kelibsiz, Admin!</b>\n\n"
         f"🤖 <b>Admin panel:</b>\n"
         f"📊 /stats - Statistika ko'rish\n"
         f"📁 /export - Google Sheets havolasi\n"
-        f"👥 /users - Foydalanuvchilar ro'yxati\n"
-        f"🔄 /restart - Botni qayta ishga tushirish\n\n"
+        f"👥 /users - Foydalanuvchilar ro'yxati\n\n"
         f"📈 <b>Bot holati:</b>\n"
         f"• Google Sheets: {'✅ Ulangan' if gs_manager.connected else '❌ Ulanmagan'}\n"
         f"• Adminlar soni: {len(ADMINS)}\n"
@@ -349,27 +327,24 @@ async def admin_panel(message: types.Message):
 
 @dp.message_handler(commands=['stats'], user_id=ADMINS)
 async def get_stats(message: types.Message):
-    """Statistika olish"""
     try:
         if not gs_manager.connected:
             await message.reply("❌ Google Sheets ga ulanmagan!")
             return
         
         all_values = gs_manager.worksheet.get_all_values()
-        total_users = len(all_values) - 1  # Header hisobga olinmagan
+        total_users = len(all_values) - 1
         
         if total_users == 0:
             await message.reply("📊 <b>Statistika:</b>\n\n❌ Hali hech qanday foydalanuvchi ro'yxatdan o'tmagan.", parse_mode="HTML")
             return
         
-        # Tumanlar bo'yicha statistik
         locations = {}
-        for row in all_values[1:]:  # Headerdan keyingi qatorlar
-            if len(row) > 2 and row[2]:  # Tuman ustuni
+        for row in all_values[1:]:
+            if len(row) > 2 and row[2]:
                 tuman = row[2]
                 locations[tuman] = locations.get(tuman, 0) + 1
         
-        # Xabar tayyorlash
         stats_message = f"📊 <b>Statistika:</b>\n\n"
         stats_message += f"👥 <b>Jami ro'yxatdan o'tganlar:</b> {total_users} ta\n\n"
         
@@ -378,7 +353,6 @@ async def get_stats(message: types.Message):
             for tuman, count in sorted(locations.items(), key=lambda x: x[1], reverse=True):
                 stats_message += f"  • {tuman}: {count} ta\n"
         
-        # Oxirgi 3 ro'yxatdan o'tgan
         stats_message += f"\n⏰ <b>Oxirgi 3 ta ro'yxatdan o'tgan:</b>\n"
         last_3 = all_values[-3:] if len(all_values) > 3 else all_values[1:]
         for i, row in enumerate(last_3, 1):
@@ -393,7 +367,6 @@ async def get_stats(message: types.Message):
 
 @dp.message_handler(commands=['users'], user_id=ADMINS)
 async def get_users(message: types.Message):
-    """Foydalanuvchilar ro'yxati"""
     try:
         if not gs_manager.connected:
             await message.reply("❌ Google Sheets ga ulanmagan!")
@@ -405,7 +378,7 @@ async def get_users(message: types.Message):
             return
         
         users_list = "📋 <b>Oxirgi 10 ta foydalanuvchi:</b>\n\n"
-        start_idx = max(1, len(all_values) - 10)  # Oxirgi 10 tasi
+        start_idx = max(1, len(all_values) - 10)
         
         for i, row in enumerate(all_values[start_idx:], start_idx):
             if len(row) > 3:
@@ -424,13 +397,11 @@ async def get_users(message: types.Message):
 
 @dp.message_handler(commands=['export'], user_id=ADMINS)
 async def export_data(message: types.Message):
-    """Ma'lumotlarni export qilish"""
     try:
         if not gs_manager.connected:
             await message.reply("❌ Google Sheets ga ulanmagan!")
             return
         
-        # Google Sheets havolasini olish
         spreadsheet_url = f"https://docs.google.com/spreadsheets/d/{gs_manager.sheet.id}"
         
         await message.reply(
@@ -445,7 +416,6 @@ async def export_data(message: types.Message):
         logging.error(f"Exportda xatolik: {e}")
         await message.reply(f"❌ Export qilishda xatolik: {str(e)}")
 
-# ======================= QOLGAN HANDLERS =======================
 @dp.message_handler(commands=['cancel'], state='*')
 async def cancel_handler(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -475,71 +445,58 @@ async def handle_all_messages(message: types.Message):
             reply_markup=types.ReplyKeyboardRemove()
         )
 
-# ======================= FLASK SERVER =======================
-app = Flask(__name__)
+# ======================= WEBHOOK SETUP =======================
+async def on_startup(dp):
+    """Webhook o'rnatish"""
+    await bot.delete_webhook()
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"✅ Webhook o'rnatildi: {WEBHOOK_URL}")
 
-@app.route('/')
-def home():
-    return "Bot ishlayapti!"
+async def on_shutdown(dp):
+    """Webhook o'chirish"""
+    await bot.delete_webhook()
+    logging.info("✅ Webhook o'chirildi")
 
-@app.route('/health')
-def health():
-    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+# ======================= WEB SERVER =======================
+async def health_check(request):
+    """Health check endpoint"""
+    return web.json_response({
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "google_sheets": gs_manager.connected
+    })
 
-@app.route('/sheet')
-def sheet_link():
+async def sheet_info(request):
+    """Google Sheets info"""
     if gs_manager.connected:
-        return f"""
-        <h1>Google Sheets</h1>
-        <p>Spreadsheet ID: {gs_manager.sheet.id}</p>
-        <p><a href="https://docs.google.com/spreadsheets/d/{gs_manager.sheet.id}" target="_blank">
-        Havolani ochish</a></p>
-        """
-    return "Google Sheets ga ulanmagan"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
-# =================== INTERNAL PING ===================
-async def keep_alive_ping():
-    url = os.environ.get("RENDER_EXTERNAL_URL", "http://127.0.0.1:5000")
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{url}/health") as resp:
-                    if resp.status == 200:
-                        logging.info(f"✅ Ping muvaffaqiyatli: {resp.status}")
-                    else:
-                        logging.warning(f"⚠️ Ping javobi: {resp.status}")
-        except Exception as e:
-            logging.error(f"❌ Ping xatoligi: {e}")
-        await asyncio.sleep(300)
-
-# =================== BOT START ===================
-async def start_bot():
-    asyncio.create_task(keep_alive_ping())
-    await dp.start_polling()
+        return web.Response(
+            text=f'<h1>Google Sheets</h1>'
+                 f'<p>Spreadsheet ID: {gs_manager.sheet.id}</p>'
+                 f'<p><a href="https://docs.google.com/spreadsheets/d/{gs_manager.sheet.id}" target="_blank">Havolani ochish</a></p>',
+            content_type='text/html'
+        )
+    return web.Response(text="Google Sheets ga ulanmagan")
 
 # =================== MAIN ===================
 if __name__ == "__main__":
-    logging.info("🤖 Bot ishga tushmoqda...")
+    logging.info("🤖 Bot ishga tushmoqda (Webhook rejimida)...")
     
-    # Google Sheets ulanishini tekshirish
     if not gs_manager.connected:
         logging.warning("⚠️ Google Sheets ga ulanmagan! Ma'lumotlar faqat Telegramda saqlanadi.")
     
-    # Flask server
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    # Web app yaratish
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/sheet', sheet_info)
+    app.router.add_post(WEBHOOK_PATH, lambda request: executor.webhook_request_handler(dp, request))
     
-    # Aiogram bot
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(start_bot())
-    except KeyboardInterrupt:
-        logging.info("📴 Bot to'xtatilmoqda...")
-    except Exception as e:
-        logging.error(f"❌ Botda xatolik: {e}")
-    finally:
-        logging.info("✅ Bot to'xtatildi")
+    # Bot ishga tushirish
+    executor.start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host=WEBAPP_HOST,
+        port=WEBAPP_PORT,
+    )
