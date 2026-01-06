@@ -3,6 +3,7 @@ import asyncio
 import threading
 import re
 import os
+import json
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types
@@ -10,13 +11,45 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.utils import exceptions
-from flask import Flask
+from flask import Flask, request
 import aiohttp
 import gspread
 from google.oauth2.service_account import Credentials
 from google.auth.exceptions import GoogleAuthError
 
 # ======================= CONFIG =======================
+import os
+import json
+
+# credentials.json ni avtomatik yaratish
+def setup_credentials():
+    """credentials.json ni sozlash"""
+    creds_file = "credentials.json"
+    
+    # Agar fayl bo'lsa, ishlat
+    if os.path.exists(creds_file):
+        logging.info(f"✅ {creds_file} topildi")
+        return True
+    
+    # Environment variable dan yaratish
+    creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+    if creds_json:
+        try:
+            with open(creds_file, 'w') as f:
+                f.write(creds_json)
+            logging.info(f"✅ {creds_file} environment variable dan yaratildi")
+            return True
+        except Exception as e:
+            logging.error(f"❌ {creds_file} yaratishda xatolik: {e}")
+            return False
+    
+    logging.error(f"❌ {creds_file} topilmadi va GOOGLE_CREDENTIALS ham yo'q")
+    return False
+
+# credentials.json ni sozlash
+if not setup_credentials():
+    logging.warning("⚠️ credentials.json sozlanmadi, Google Sheets ishlamaydi")
+
 from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR
 from buttons import toshkent_tumanlari  # Toshkent tumanlari uchun reply keyboard
 
@@ -149,12 +182,11 @@ bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 
 # ======================= HANDLERS =======================
-
 @dp.message_handler(commands=['start', 'help'])
 async def send_welcome(message: types.Message):
     # Adminlar uchun alohida xabar
     if message.from_user.id in ADMINS:
-        # Admin uchun state ni tozalash
+        # Admin state ni tozalash
         current_state = await dp.current_state(user=message.from_user.id).get_state()
         if current_state:
             await dp.current_state(user=message.from_user.id).finish()
@@ -162,10 +194,12 @@ async def send_welcome(message: types.Message):
         await message.reply(
             f"👋 <b>Xush kelibsiz, Admin!</b>\n\n"
             f"🤖 <b>Admin panel:</b>\n"
-            f"📁 /export - Google Sheets havolasi\n",
+            f"📊 /stats - Statistika ko'rish\n"
+            f"📁 /export - Google Sheets havolasi\n"
+            f"👥 /users - Foydalanuvchilar ro'yxati\n\n"
+            f"📝 <i>Agar ro'yxatdan o'tmoqchi bo'lsangiz, ismingizni kiriting:</i>",
             parse_mode="HTML"
         )
-        # ADMIN uchun state O'RNATILMAYDI
     else:
         # Oddiy foydalanuvchilar uchun
         await message.reply(
@@ -174,8 +208,9 @@ async def send_welcome(message: types.Message):
             "Ismingizni kiriting:",
             parse_mode="HTML"
         )
-        # State ni to'g'ri o'rnatish (faqat oddiy foydalanuvchilar uchun)
-        await Register.name.set()
+    
+    # State ni to'g'ri o'rnatish
+    await Register.name.set()
 
 @dp.message_handler(state=Register.name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -497,6 +532,20 @@ def sheet_link():
         """
     return "Google Sheets ga ulanmagan"
 
+# Webhook endpoint
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    """Telegram webhook"""
+    if request.method == 'POST':
+        try:
+            update = types.Update(**request.json)
+            await dp.process_update(update)
+            return 'OK'
+        except Exception as e:
+            logging.error(f"Webhook xatosi: {e}")
+            return 'Error', 500
+    return 'Method not allowed', 405
+
 def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
@@ -519,7 +568,27 @@ async def keep_alive_ping():
 # =================== BOT START ===================
 async def start_bot():
     asyncio.create_task(keep_alive_ping())
-    await dp.start_polling()
+    
+    # Agar RENDER environment bo'lsa, webhook ishlat
+    if os.environ.get('RENDER'):
+        # Webhook URL ni aniqlash
+        service_name = os.environ.get('RENDER_SERVICE_NAME', 'rs-bot-6b9r')
+        webhook_url = f"https://{service_name}.onrender.com/webhook"
+        
+        # Eski webhook ni tozalash
+        await bot.delete_webhook()
+        await asyncio.sleep(1)
+        
+        # Yangi webhook ni o'rnatish
+        await bot.set_webhook(webhook_url)
+        logging.info(f"✅ Webhook o'rnatildi: {webhook_url}")
+        
+        # Flask server ishlashini kuting
+        return
+    else:
+        # Localda polling ishlat
+        logging.info("🤖 Local polling rejimida ishlayapti...")
+        await dp.start_polling()
 
 # =================== MAIN ===================
 if __name__ == "__main__":
