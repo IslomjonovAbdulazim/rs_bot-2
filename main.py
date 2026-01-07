@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import os
+import json
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, executor
@@ -48,13 +49,29 @@ class GoogleSheetsManager:
                 'https://www.googleapis.com/auth/drive'
             ]
             
-            if not os.path.exists(CREDENTIALS_FILE):
-                logging.error(f"❌ Credentials fayli topilmadi: {CREDENTIALS_FILE}")
+            # Environment variable dan JSON yuklab olish
+            creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+            
+            if creds_json:
+                # JSON stringdan credentials yaratish
+                try:
+                    creds_dict = json.loads(creds_json)
+                    creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+                    logging.info("✅ Credentials environment variable dan yuklandi")
+                except json.JSONDecodeError as e:
+                    logging.error(f"❌ JSON parse xatosi: {e}")
+                    return False
+            elif os.path.exists(CREDENTIALS_FILE):
+                # Fayldan yuklab olish (local development uchun)
+                creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
+                logging.info("✅ Credentials fayldan yuklandi")
+            else:
+                logging.error(f"❌ Credentials topilmadi! Environment variable yoki fayl kerak.")
                 return False
             
-            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scope)
             client = gspread.authorize(creds)
             
+            # Spreadsheet ni ochish yoki yaratish
             try:
                 self.sheet = client.open(SPREADSHEET_NAME)
             except gspread.SpreadsheetNotFound:
@@ -62,11 +79,13 @@ class GoogleSheetsManager:
                 self.sheet.share('', perm_type='anyone', role='writer')
                 logging.info(f"✅ Yangi spreadsheet yaratildi: {SPREADSHEET_NAME}")
             
+            # Worksheet ni tekshirish yoki yaratish
             try:
                 self.worksheet = self.sheet.get_worksheet(0)
             except:
                 self.worksheet = self.sheet.add_worksheet(title="Foydalanuvchilar", rows=1000, cols=20)
             
+            # Agar bo'sh bo'lsa, headerlar qo'shish
             if not self.worksheet.get('A1'):
                 headers = [
                     ['№', 'Ism', 'Tuman', 'Telefon', 'User ID', 'To\'liq Ism', 
@@ -153,7 +172,11 @@ async def send_welcome(message: types.Message):
         await message.reply(
             f"👋 <b>Xush kelibsiz, Admin!</b>\n\n"
             f"🤖 <b>Admin panel:</b>\n"
-            f"📁 /export - Google Sheets havolasi\n",
+            f"📊 /stats - Statistika\n"
+            f"📁 /export - Google Sheets havolasi\n"
+            f"👥 /users - Foydalanuvchilar\n\n"
+            f"📈 <b>Holat:</b>\n"
+            f"• Google Sheets: {'✅ Ulangan' if gs_manager.connected else '❌ Ulanmagan'}\n",
             parse_mode="HTML"
         )
     else:
@@ -291,7 +314,7 @@ async def process_phone(message: types.Message, state: FSMContext):
     success_message += "📚 Marhamat, autizm haqidagi maxsus qo'llanma:"
     
     try:
-        await message.reply(success_message, parse_mode="HTML")
+        await message.reply(success_message, parse_mode="HTML", reply_markup=types.ReplyKeyboardRemove())
         await message.reply_document(
             document=open("Autizm.pdf", "rb"),
             caption="",
