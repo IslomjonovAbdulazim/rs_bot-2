@@ -3,6 +3,9 @@ import logging
 import os
 import re
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -140,9 +143,12 @@ async def main():
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher(bot, storage=MemoryStorage())
 
-    # 🔥 WEBHOOK UCHUN MUHIM
-    Bot.set_current(bot)
-    Dispatcher.set_current(dp)
+    # 🔥 WEBHOOK SOZLAMALARI
+    if not WEBHOOK_HOST or "render.com" not in WEBHOOK_HOST and "http" not in WEBHOOK_HOST:
+        logging.warning("⚠️ WEBHOOK_HOST topilmadi yoki noto'g'ri. Polling rejimiga o'tilmoqda...")
+        USE_WEBHOOK = False
+    else:
+        USE_WEBHOOK = True
 
     dp.middleware.setup(LoggingMiddleware())
 
@@ -155,22 +161,32 @@ async def main():
         content_types=["text", "contact"]
     )
 
-    await bot.set_webhook(WEBHOOK_URL)
+    if USE_WEBHOOK:
+        try:
+            await bot.set_webhook(WEBHOOK_URL)
+            logging.info(f"✅ Webhook o'rnatildi: {WEBHOOK_URL}")
+            
+            app = web.Application()
+            app.router.add_get("/", health)
+            app.router.add_post(WEBHOOK_PATH, handle_webhook)
 
-    app = web.Application()
-    app.router.add_get("/", health)
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, WEBAPP_HOST, WEBAPP_PORT)
+            await site.start()
 
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, WEBAPP_HOST, WEBAPP_PORT)
-    await site.start()
+            # 🔁 SELF PING ISHGA TUSHADI
+            asyncio.create_task(self_ping())
+            logging.info("🚀 Bot ishga tushdi (Webhook rejimida)")
+            await asyncio.Event().wait()
+        except Exception as e:
+            logging.error(f"❌ Webhook xatosi: {e}")
+            logging.warning("⚠️ Polling rejimiga o'tilmoqda...")
+            USE_WEBHOOK = False
 
-    # 🔁 SELF PING ISHGA TUSHADI
-    asyncio.create_task(self_ping())
-
-    logging.info("🚀 Bot ishga tushdi (Render FREE)")
-    await asyncio.Event().wait()
+    if not USE_WEBHOOK:
+        logging.info("🚀 Bot ishga tushdi (Polling rejimida)")
+        await dp.start_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
