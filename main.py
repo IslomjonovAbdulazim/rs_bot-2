@@ -35,39 +35,65 @@ logging.basicConfig(level=logging.INFO)
 
 # ======================= KEEP ALIVE FUNKSIYASI =======================
 async def keep_alive_pinger():
-    """24/7 bot ishlashi uchun har 5 daqiqada 10 ta ping yuboradi"""
-    await asyncio.sleep(60)  # Bot to'liq ishga tushguncha kutish
+    """Render uchun optimallashtirilgan keep-alive"""
+    await asyncio.sleep(30)  # Bot to'liq ishga tushguncha kutish
     
-    ping_urls = [
-        f"{WEBHOOK_HOST}/health",
-        f"{WEBHOOK_HOST}/",
-        f"{WEBHOOK_HOST}/sheet",
-    ]
+    # Render uchun faqat asosiy URL va health check
+    ping_urls = [WEBHOOK_HOST, f"{WEBHOOK_HOST}/health"]
     
     ping_count = 0
     
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                # 10 ta ping yuborish
-                for i in range(10):
-                    for url in ping_urls:
-                        try:
-                            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                                if response.status == 200:
-                                    ping_count += 1
-                                    if ping_count % 30 == 0:  # Har 30 ta pingda log
-                                        logging.info(f"✅ Keep-Alive: {ping_count} ping yuborildi | {datetime.now().strftime('%H:%M:%S')}")
-                        except Exception as e:
-                            logging.debug(f"Ping xatosi (normal): {e}")
-                    
-                    await asyncio.sleep(2)  # Har bir ping orasida 2 soniya
-            
-            # 5 daqiqa kutish (300 soniya)
-            await asyncio.sleep(270)  # 270 + 30 (10 ping x 3 url x 2s) = ~300s
-            
+                # Har 14 daqiqada bir marta 2 ta ping yuborish
+                for url in ping_urls:
+                    try:
+                        async with session.get(url, timeout=5) as response:
+                            ping_count += 1
+                            if ping_count % 6 == 0:  # Har 6-pingda (84 daqiqada) log
+                                logging.info(f"✅ Keep-Alive ping #{ping_count}: {response.status} | {datetime.now().strftime('%H:%M')}")
+                    except Exception as e:
+                        logging.debug(f"⚠️ Ping xatosi: {e}")
+                
+                # 14 daqiqa (840 soniya) kutish - Render free plan uchun optimal
+                await asyncio.sleep(840)
+                
         except Exception as e:
             logging.error(f"❌ Keep-alive global xato: {e}")
+            await asyncio.sleep(60)
+
+# ======================= BOT QAYTA TIKLASH FUNKSIYASI =======================
+async def bot_maintainer():
+    """Botni doimiy faol ushlab turish"""
+    last_check = datetime.now()
+    
+    while True:
+        try:
+            # Har 30 daqiqada bot holatini tekshirish
+            current_time = datetime.now()
+            if (current_time - last_check).seconds > 1800:  # 30 daqiqa
+                try:
+                    me = await bot.get_me()
+                    logging.info(f"🤖 Bot faol: @{me.username}")
+                    
+                    # Webhook ni tekshirish
+                    webhook_info = await bot.get_webhook_info()
+                    if not webhook_info.url or WEBHOOK_URL not in webhook_info.url:
+                        logging.warning("⚠️ Webhook noto'g'ri, qayta o'rnatilmoqda...")
+                        await bot.delete_webhook()
+                        await asyncio.sleep(1)
+                        await bot.set_webhook(WEBHOOK_URL)
+                        logging.info("✅ Webhook qayta o'rnatildi")
+                    
+                    last_check = current_time
+                except Exception as bot_error:
+                    logging.error(f"❌ Bot tekshirish xatosi: {bot_error}")
+            
+            await asyncio.sleep(300)  # 5 daqiqa kutish
+            
+        except Exception as e:
+            logging.error(f"❌ Maintainer xatosi: {e}")
             await asyncio.sleep(60)
 
 # ======================= GOOGLE SHEETS SETUP =======================
@@ -170,7 +196,6 @@ class GoogleSheetsManager:
                 "✅ Ro'yxatdan o'tgan"
             ]
             
-            # TUZATILGAN: named arguments ishlatildi
             self.worksheet.update(values=[row_data], range_name=f'A{next_row}:J{next_row}')
             
             self.worksheet.format(f'A{next_row}:J{next_row}', {
@@ -516,6 +541,39 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 async def restart_handler(message: types.Message):
     await send_welcome(message)
 
+@dp.message_handler(commands=['status'], user_id=ADMINS)
+async def check_status(message: types.Message):
+    try:
+        # Bot aktivligini tekshirish
+        me = await bot.get_me()
+        
+        # Google Sheets holati
+        gs_status = "✅ Ulangan" if gs_manager.connected else "❌ Ulanmagan"
+        
+        # Webhook holati
+        webhook_info = await bot.get_webhook_info()
+        
+        status_message = (
+            f"📊 <b>Bot Status Report</b>\n\n"
+            f"🤖 <b>Bot:</b> @{me.username}\n"
+            f"🆔 <b>ID:</b> {me.id}\n"
+            f"📅 <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"🔗 <b>Webhook:</b>\n"
+            f"• URL: {webhook_info.url[:50]}...\n"
+            f"• Pending updates: {webhook_info.pending_update_count}\n\n"
+            f"📊 <b>Google Sheets:</b> {gs_status}\n\n"
+            f"🔄 <b>Keep-Alive:</b> ✅ Faol\n"
+            f"⏰ <b>Pinglar:</b> Har 14 daqiqada\n\n"
+            f"🌐 <b>Health Check:</b>\n"
+            f"• {WEBHOOK_HOST}/health\n"
+            f"• {WEBHOOK_HOST}/sheet"
+        )
+        
+        await message.reply(status_message, parse_mode="HTML")
+        
+    except Exception as e:
+        await message.reply(f"❌ Status check xatosi: {str(e)}")
+
 @dp.message_handler(state='*')
 async def handle_all_messages(message: types.Message):
     try:
@@ -530,30 +588,6 @@ async def handle_all_messages(message: types.Message):
     except Exception as e:
         logging.error(f"❌ handle_all_messages xatosi: {e}")
 
-# ======================= WEBHOOK SETUP =======================
-async def on_startup(dp):
-    """Webhook o'rnatish va Keep-Alive ishga tushirish"""
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-        await asyncio.sleep(1)
-        await bot.set_webhook(WEBHOOK_URL)
-        logging.info(f"✅ Webhook o'rnatildi: {WEBHOOK_URL}")
-        
-        # Keep-Alive task ni ishga tushirish
-        asyncio.create_task(keep_alive_pinger())
-        logging.info("✅ Keep-Alive task ishga tushdi (24/7 rejim)")
-        
-    except Exception as e:
-        logging.error(f"❌ Webhook o'rnatishda xatolik: {e}")
-
-async def on_shutdown(dp):
-    """Webhook o'chirish"""
-    try:
-        await bot.delete_webhook()
-        logging.info("✅ Webhook o'chirildi")
-    except Exception as e:
-        logging.error(f"❌ Webhook o'chirishda xatolik: {e}")
-
 # ======================= WEB SERVER =======================
 async def health_check(request):
     """Health check endpoint"""
@@ -562,7 +596,8 @@ async def health_check(request):
             "status": "ok",
             "timestamp": datetime.now().isoformat(),
             "google_sheets": gs_manager.connected,
-            "keep_alive": "active"
+            "keep_alive": "active",
+            "render": "online"
         })
     except Exception as e:
         logging.error(f"❌ health_check xatosi: {e}")
@@ -577,7 +612,8 @@ async def sheet_info(request):
                      f'<p>✅ Connected</p>'
                      f'<p>Spreadsheet ID: {gs_manager.sheet.id}</p>'
                      f'<p><a href="https://docs.google.com/spreadsheets/d/{gs_manager.sheet.id}" target="_blank">Open Spreadsheet</a></p>'
-                     f'<p>Keep-Alive: Active 24/7</p>',
+                     f'<p>Keep-Alive: Active 24/7</p>'
+                     f'<p>Render: Running ✅</p>',
                 content_type='text/html'
             )
         return web.Response(text="Google Sheets ga ulanmagan")
@@ -591,18 +627,32 @@ async def root_handler(request):
         text=f'<h1>Bot Status: Running ✅</h1>'
              f'<p>Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>'
              f'<p>Keep-Alive: Active 24/7 🔄</p>'
+             f'<p>Render Hosting: Active</p>'
              f'<p><a href="/health">Health Check</a></p>'
              f'<p><a href="/sheet">Google Sheets</a></p>',
         content_type='text/html'
     )
 
-# =================== MAIN ===================
-if __name__ == "__main__":
+# =================== ASYNC MAIN FUNKSIYASI ===================
+async def main():
+    """Asosiy ishga tushirish funksiyasi"""
     logging.info("🤖 Bot ishga tushmoqda (Webhook + Keep-Alive rejimida)...")
-    logging.info("🔄 24/7 Keep-Alive: Har 5 daqiqada 10 ta ping yuboriladi")
+    logging.info(f"📡 Webhook URL: {WEBHOOK_URL}")
+    logging.info(f"🌐 Web server: {WEBAPP_HOST}:{WEBAPP_PORT}")
     
-    if not gs_manager.connected:
-        logging.warning("⚠️ Google Sheets ga ulanmagan! Ma'lumotlar faqat Telegramda saqlanadi.")
+    # Botni sozlash
+    await bot.delete_webhook(drop_pending_updates=True)
+    await asyncio.sleep(1)
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"✅ Webhook o'rnatildi: {WEBHOOK_URL}")
+    
+    # Maintainer task ni ishga tushirish
+    asyncio.create_task(bot_maintainer())
+    logging.info("✅ Bot maintainer ishga tushdi")
+    
+    # Keep-alive task ni ishga tushirish
+    asyncio.create_task(keep_alive_pinger())
+    logging.info("✅ Keep-alive ishga tushdi (Har 14 daqiqada ping)")
     
     # Web app yaratish
     app = web.Application()
@@ -611,7 +661,26 @@ if __name__ == "__main__":
     app.router.add_get('/sheet', sheet_info)
     app.router.add_post(WEBHOOK_PATH, lambda request: executor.webhook_request_handler(dp, request))
     
-    # TUZATILGAN: executor.start_polling O'RNIGA web.run_app ishlatamiz
     # Web serverni ishga tushirish
-    web.run_app(app, host=WEBAPP_HOST, port=WEBAPP_PORT)
-    # Bot ishga tushirish
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, WEBAPP_HOST, WEBAPP_PORT)
+    await site.start()
+    
+    logging.info(f"🚀 Web server {WEBAPP_PORT} portda ishga tushdi")
+    logging.info("🔄 24/7 Keep-Alive: Har 14 daqiqada 2 ta ping yuboriladi")
+    
+    if not gs_manager.connected:
+        logging.warning("⚠️ Google Sheets ga ulanmagan! Ma'lumotlar faqat Telegramda saqlanadi.")
+    
+    # Cheksiz kutish
+    await asyncio.Event().wait()
+
+# =================== ENTRY POINT ===================
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("⏹️ Bot to'xtatildi")
+    except Exception as e:
+        logging.error(f"❌ Asosiy xato: {e}")
