@@ -15,6 +15,8 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 
 from aiohttp import web
 import aiohttp
+import gspread
+from data import GOOGLE_CREDENTIALS, CREDENTIALS_FILE, SPREADSHEET_NAME
 
 # ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -97,12 +99,12 @@ async def process_phone(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
 
-    logging.info({
-        "name": data["name"],
-        "location": data["location"],
-        "phone": phone,
-        "user_id": message.from_user.id,
-        "time": datetime.now()
+    save_to_sheets({
+        "Ism": data["name"],
+        "Tuman": data["location"],
+        "Telefon": phone,
+        "User ID": message.from_user.id,
+        "Vaqt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
 
     await state.finish()
@@ -111,6 +113,30 @@ async def process_phone(message: types.Message, state: FSMContext):
         "✅ Ro‘yxatdan o‘tdingiz!",
         reply_markup=types.ReplyKeyboardRemove()
     )
+
+# ================== GOOGLE SHEETS ==================
+def save_to_sheets(row_data: dict):
+    try:
+        if GOOGLE_CREDENTIALS:
+            gc = gspread.service_account_from_dict(GOOGLE_CREDENTIALS)
+        else:
+            gc = gspread.service_account(filename=CREDENTIALS_FILE)
+        
+        sh = gc.open(SPREADSHEET_NAME)
+        wks = sh.get_worksheet(0)
+        
+        # Headerlarni tekshirish va qo'shish (agar bo'sh bo'lsa)
+        headers = wks.row_values(1)
+        if not headers:
+            wks.insert_row(list(row_data.keys()), 1)
+            headers = list(row_data.keys())
+        
+        # Ma'lumotni tartib bilan qo'shish
+        row = [row_data.get(h, "") for h in headers]
+        wks.append_row(row)
+        logging.info("📝 Ma'lumot Google Sheetsga saqlandi!")
+    except Exception as e:
+        logging.error(f"❌ Google Sheets xatosi: {e}")
 
 # ================== WEBHOOK ==================
 async def handle_webhook(request):
