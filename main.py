@@ -4,7 +4,7 @@ import os
 import json
 from datetime import datetime
 
-from aiogram import Bot, Dispatcher, types, executor
+from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
@@ -588,6 +588,26 @@ async def handle_all_messages(message: types.Message):
     except Exception as e:
         logging.error(f"❌ handle_all_messages xatosi: {e}")
 
+# ======================= WEBHOOK HANDLER =======================
+async def handle_webhook(request):
+    """Webhook request handler for aiohttp"""
+    try:
+        # Telegram dan kelgan JSON ni o'qish
+        update_json = await request.json()
+        update = types.Update(**update_json)
+        
+        # Update ni Dispatcher ga uzatish
+        await dp.process_update(update)
+        
+        return web.Response(text="OK", status=200)
+        
+    except exceptions.TelegramAPIError as e:
+        logging.error(f"Telegram API error: {e}")
+        return web.Response(text="Error", status=500)
+    except Exception as e:
+        logging.error(f"Webhook processing error: {e}")
+        return web.Response(text="Error", status=500)
+
 # ======================= WEB SERVER =======================
 async def health_check(request):
     """Health check endpoint"""
@@ -659,7 +679,9 @@ async def main():
     app.router.add_get('/', root_handler)
     app.router.add_get('/health', health_check)
     app.router.add_get('/sheet', sheet_info)
-    app.router.add_post(WEBHOOK_PATH, lambda request: executor.webhook_request_handler(dp, request))
+    
+    # TUZATILGAN WEBHOOK HANDLER - bu asosiy o'zgartirish
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
     
     # Web serverni ishga tushirish
     runner = web.AppRunner(app)
