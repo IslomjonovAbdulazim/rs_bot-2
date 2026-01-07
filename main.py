@@ -193,6 +193,11 @@ async def main():
 
     bot = Bot(API_TOKEN)
     dp = Dispatcher(bot, storage=MemoryStorage())
+
+    # 🔥 MUHIM QATORLAR
+    Bot.set_current(bot)
+    Dispatcher.set_current(dp)
+
     dp.middleware.setup(LoggingMiddleware())
 
     gs_manager = GoogleSheetsManager()
@@ -200,7 +205,11 @@ async def main():
     dp.register_message_handler(start_handler, commands=["start"])
     dp.register_message_handler(process_name, state=Register.name)
     dp.register_message_handler(process_location, state=Register.location)
-    dp.register_message_handler(process_phone, state=Register.phone, content_types=["text", "contact"])
+    dp.register_message_handler(
+        process_phone,
+        state=Register.phone,
+        content_types=["text", "contact"]
+    )
 
     await bot.set_webhook(WEBHOOK_URL)
 
@@ -213,6 +222,7 @@ async def main():
     await site.start()
 
     await asyncio.Event().wait()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
