@@ -22,7 +22,7 @@ from buttons import toshkent_tumanlari
 API_TOKEN = BOT_TOKEN
 
 # Render webhook sozlamalari
-WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL", "https://your-app.onrender.com")
+WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL", "https://rs-bot-6b9r.onrender.com")
 WEBHOOK_PATH = f"/webhook/{API_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 
