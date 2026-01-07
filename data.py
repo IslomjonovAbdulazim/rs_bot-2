@@ -13,11 +13,22 @@ SPREADSHEET_NAME = os.getenv("SPREADSHEET_NAME", "RAHIMOV SCHOOL")
 GOOGLE_JSON_STR = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 if GOOGLE_JSON_STR:
     try:
+        # Ba'zan .env dan o'qilganda ' yoki " bilan o'ralgan bo'lib qolishi mumkin
+        if (GOOGLE_JSON_STR.startswith("'") and GOOGLE_JSON_STR.endswith("'")) or \
+           (GOOGLE_JSON_STR.startswith('"') and GOOGLE_JSON_STR.endswith('"')):
+            GOOGLE_JSON_STR = GOOGLE_JSON_STR[1:-1]
+            
         GOOGLE_CREDENTIALS = json.loads(GOOGLE_JSON_STR)
+        
+        # Private key dagi \n belgilarini to'g'rilash
+        if "private_key" in GOOGLE_CREDENTIALS:
+            GOOGLE_CREDENTIALS["private_key"] = GOOGLE_CREDENTIALS["private_key"].replace("\\n", "\n")
+            
         CREDENTIALS_FILE = None # Dictionary ishlatiladi
     except Exception as e:
         print(f"❌ JSON PARSE ERROR: {e}")
         CREDENTIALS_FILE = "credentials.json"
+        GOOGLE_CREDENTIALS = None
 else:
     CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "credentials.json")
     GOOGLE_CREDENTIALS = None
