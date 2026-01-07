@@ -3,14 +3,13 @@ import asyncio
 import os
 import json
 from datetime import datetime
-# main.py faylining eng boshiga (importlardan keyin) qo'shing:
-from aiogram import Bot
-from aiogram.contrib.middlewares.logging import LoggingMiddleware
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.utils import exceptions
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiohttp import web
 import aiohttp
 import gspread
@@ -19,8 +18,19 @@ from google.auth.exceptions import GoogleAuthError
 import re
 
 # ======================= CONFIG =======================
-from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR
-from buttons import toshkent_tumanlari
+try:
+    from data import BOT_TOKEN, ADMINS, SPREADSHEET_NAME, CREDENTIALS_FILE, HEADER_COLOR, SUCCESS_COLOR
+    from buttons import toshkent_tumanlari
+except ImportError as e:
+    logging.error(f"❌ Import xatosi: {e}")
+    # Fallback ma'lumotlar
+    BOT_TOKEN = os.environ.get("BOT_TOKEN", "8579757300:AAEy8fUxoISogUMCAPnaPyBJLr5PPsMY-pI")
+    ADMINS = [int(id) for id in os.environ.get("ADMINS", "").split(",") if id]
+    SPREADSHEET_NAME = "Autizm Bot Ma'lumotlar"
+    CREDENTIALS_FILE = "credentials.json"
+    HEADER_COLOR = {"red": 0.29, "green": 0.53, "blue": 0.91}
+    SUCCESS_COLOR = {"red": 0.58, "green": 0.77, "blue": 0.49}
+    toshkent_tumanlari = None
 
 API_TOKEN = BOT_TOKEN
 
@@ -35,68 +45,10 @@ WEBAPP_PORT = int(os.environ.get("PORT", 5000))
 
 logging.basicConfig(level=logging.INFO)
 
-# ======================= KEEP ALIVE FUNKSIYASI =======================
-async def keep_alive_pinger():
-    """Render uchun optimallashtirilgan keep-alive"""
-    await asyncio.sleep(30)  # Bot to'liq ishga tushguncha kutish
-    
-    # Render uchun faqat asosiy URL va health check
-    ping_urls = [WEBHOOK_HOST, f"{WEBHOOK_HOST}/health"]
-    
-    ping_count = 0
-    
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Har 14 daqiqada bir marta 2 ta ping yuborish
-                for url in ping_urls:
-                    try:
-                        async with session.get(url, timeout=5) as response:
-                            ping_count += 1
-                            if ping_count % 6 == 0:  # Har 6-pingda (84 daqiqada) log
-                                logging.info(f"✅ Keep-Alive ping #{ping_count}: {response.status} | {datetime.now().strftime('%H:%M')}")
-                    except Exception as e:
-                        logging.debug(f"⚠️ Ping xatosi: {e}")
-                
-                # 14 daqiqa (840 soniya) kutish - Render free plan uchun optimal
-                await asyncio.sleep(840)
-                
-        except Exception as e:
-            logging.error(f"❌ Keep-alive global xato: {e}")
-            await asyncio.sleep(60)
-
-# ======================= BOT QAYTA TIKLASH FUNKSIYASI =======================
-async def bot_maintainer():
-    """Botni doimiy faol ushlab turish"""
-    last_check = datetime.now()
-    
-    while True:
-        try:
-            # Har 30 daqiqada bot holatini tekshirish
-            current_time = datetime.now()
-            if (current_time - last_check).seconds > 1800:  # 30 daqiqa
-                try:
-                    me = await bot.get_me()
-                    logging.info(f"🤖 Bot faol: @{me.username}")
-                    
-                    # Webhook ni tekshirish
-                    webhook_info = await bot.get_webhook_info()
-                    if not webhook_info.url or WEBHOOK_URL not in webhook_info.url:
-                        logging.warning("⚠️ Webhook noto'g'ri, qayta o'rnatilmoqda...")
-                        await bot.delete_webhook()
-                        await asyncio.sleep(1)
-                        await bot.set_webhook(WEBHOOK_URL)
-                        logging.info("✅ Webhook qayta o'rnatildi")
-                    
-                    last_check = current_time
-                except Exception as bot_error:
-                    logging.error(f"❌ Bot tekshirish xatosi: {bot_error}")
-            
-            await asyncio.sleep(300)  # 5 daqiqa kutish
-            
-        except Exception as e:
-            logging.error(f"❌ Maintainer xatosi: {e}")
-            await asyncio.sleep(60)
+# ======================= GLOBAL OBYEKTLAR =======================
+bot = None
+dp = None
+gs_manager = None
 
 # ======================= GOOGLE SHEETS SETUP =======================
 class GoogleSheetsManager:
@@ -158,7 +110,7 @@ class GoogleSheetsManager:
                 ]
                 self.worksheet.update(values=headers, range_name='A1:J1')
                 self.worksheet.format('A1:J1', {
-                    "backgroundColor": {"red": 0.29, "green": 0.53, "blue": 0.91},
+                    "backgroundColor": HEADER_COLOR,
                     "textFormat": {"bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}},
                     "horizontalAlignment": "CENTER"
                 })
@@ -201,7 +153,7 @@ class GoogleSheetsManager:
             self.worksheet.update(values=[row_data], range_name=f'A{next_row}:J{next_row}')
             
             self.worksheet.format(f'A{next_row}:J{next_row}', {
-                "backgroundColor": {"red": 0.58, "green": 0.77, "blue": 0.49},
+                "backgroundColor": SUCCESS_COLOR,
                 "textFormat": {"bold": False}
             })
             
@@ -212,28 +164,21 @@ class GoogleSheetsManager:
             logging.error(f"❌ Google Sheets ga yozishda xatolik: {e}")
             return False
 
-gs_manager = GoogleSheetsManager()
-
 # ======================= STATES =======================
 class Register(StatesGroup):
     name = State()
     location = State()
     phone = State()
 
-# ======================= BOT SETUP =======================
-storage = MemoryStorage()
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot, storage=storage)
-
 # ======================= HANDLERS =======================
-
-@dp.message_handler(commands=['start', 'help'])
-async def send_welcome(message: types.Message):
+async def send_welcome_handler(message: types.Message, state: FSMContext):
+    """Send welcome message handler"""
     try:
         if message.from_user.id in ADMINS:
-            current_state = await dp.current_state(user=message.from_user.id).get_state()
+            # Admin panel
+            current_state = await state.get_state()
             if current_state:
-                await dp.current_state(user=message.from_user.id).finish()
+                await state.finish()
             
             await message.reply(
                 f"👋 <b>Xush kelibsiz, Admin!</b>\n\n"
@@ -243,10 +188,11 @@ async def send_welcome(message: types.Message):
                 f"👥 /users - Foydalanuvchilar\n\n"
                 f"📈 <b>Holat:</b>\n"
                 f"• Google Sheets: {'✅ Ulangan' if gs_manager.connected else '❌ Ulanmagan'}\n"
-                f"• Keep-Alive: ✅ Faol\n",
+                f"• Bot ishlayapti: ✅\n",
                 parse_mode="HTML"
             )
         else:
+            # Oddiy foydalanuvchi
             await message.reply(
                 f"Assalomu Alaykum, <b>{message.from_user.full_name}</b> 😊\n"
                 "Autizm haqidagi qo'llanmani olish uchun 3 qadam qoldi 🤩 \n\n<b>1-qadam:</b>\n"
@@ -257,24 +203,27 @@ async def send_welcome(message: types.Message):
     except Exception as e:
         logging.error(f"❌ send_welcome xatosi: {e}")
 
-@dp.message_handler(state=Register.name)
-async def process_name(message: types.Message, state: FSMContext):
+async def process_name_handler(message: types.Message, state: FSMContext):
+    """Process name handler"""
     try:
         name = message.text.strip()
         if not name.replace(" ", "").isalpha() or len(name) < 2:
             await message.reply("❌ Iltimos, to'g'ri ism kiriting (faqat harflardan iborat bo'lsin)")
             return
+        
         await state.update_data(name=name)
         await Register.location.set()
-        await message.reply(
-            "📍 Toshkent shahrining qaysi tumanida yashaysiz?",
-            reply_markup=toshkent_tumanlari
-        )
+        
+        # Tumanlar ro'yxati
+        if toshkent_tumanlari:
+            await message.reply("📍 Toshkent shahrining qaysi tumanida yashaysiz?", reply_markup=toshkent_tumanlari)
+        else:
+            await message.reply("📍 Toshkent shahrining qaysi tumanida yashaysiz? (Tuman nomini yozing)")
     except Exception as e:
         logging.error(f"❌ process_name xatosi: {e}")
 
-@dp.message_handler(state=Register.location)
-async def process_location(message: types.Message, state: FSMContext):
+async def process_location_handler(message: types.Message, state: FSMContext):
+    """Process location handler"""
     try:
         location = message.text
         await state.update_data(location=location)
@@ -296,8 +245,8 @@ async def process_location(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"❌ process_location xatosi: {e}")
 
-@dp.message_handler(content_types=['contact', 'text'], state=Register.phone)
-async def process_phone(message: types.Message, state: FSMContext):
+async def process_phone_handler(message: types.Message, state: FSMContext):
+    """Process phone handler"""
     try:
         phone = ""
         if message.contact:
@@ -411,9 +360,9 @@ async def process_phone(message: types.Message, state: FSMContext):
         logging.error(f"❌ process_phone xatosi: {e}")
         await message.reply("❌ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring yoki /start ni bosing.")
 
-# ======================= ADMIN KOMANDALARI =======================
-@dp.message_handler(commands=['admin'], user_id=ADMINS)
-async def admin_panel(message: types.Message):
+# ======================= ADMIN HANDLERS =======================
+async def admin_panel_handler(message: types.Message):
+    """Admin panel handler"""
     try:
         await message.reply(
             f"👋 <b>Xush kelibsiz, Admin!</b>\n\n"
@@ -424,15 +373,14 @@ async def admin_panel(message: types.Message):
             f"📈 <b>Bot holati:</b>\n"
             f"• Google Sheets: {'✅ Ulangan' if gs_manager.connected else '❌ Ulanmagan'}\n"
             f"• Adminlar soni: {len(ADMINS)}\n"
-            f"• Keep-Alive: ✅ Faol (24/7)\n"
             f"• Bot ishlayapti: ✅",
             parse_mode="HTML"
         )
     except Exception as e:
         logging.error(f"❌ admin_panel xatosi: {e}")
 
-@dp.message_handler(commands=['stats'], user_id=ADMINS)
-async def get_stats(message: types.Message):
+async def get_stats_handler(message: types.Message):
+    """Get statistics handler"""
     try:
         if not gs_manager.connected or not gs_manager.worksheet:
             await message.reply("❌ Google Sheets ga ulanmagan!")
@@ -471,8 +419,8 @@ async def get_stats(message: types.Message):
         logging.error(f"Statistika olishda xatolik: {e}")
         await message.reply(f"❌ Statistika olishda xatolik: {str(e)}")
 
-@dp.message_handler(commands=['users'], user_id=ADMINS)
-async def get_users(message: types.Message):
+async def get_users_handler(message: types.Message):
+    """Get users handler"""
     try:
         if not gs_manager.connected or not gs_manager.worksheet:
             await message.reply("❌ Google Sheets ga ulanmagan!")
@@ -501,8 +449,8 @@ async def get_users(message: types.Message):
         logging.error(f"Foydalanuvchilar ro'yxatini olishda xatolik: {e}")
         await message.reply(f"❌ Foydalanuvchilar ro'yxatini olishda xatolik: {str(e)}")
 
-@dp.message_handler(commands=['export'], user_id=ADMINS)
-async def export_data(message: types.Message):
+async def export_data_handler(message: types.Message):
+    """Export data handler"""
     try:
         if not gs_manager.connected or not gs_manager.sheet:
             await message.reply("❌ Google Sheets ga ulanmagan!")
@@ -522,8 +470,8 @@ async def export_data(message: types.Message):
         logging.error(f"Exportda xatolik: {e}")
         await message.reply(f"❌ Export qilishda xatolik: {str(e)}")
 
-@dp.message_handler(commands=['cancel'], state='*')
 async def cancel_handler(message: types.Message, state: FSMContext):
+    """Cancel handler"""
     try:
         current_state = await state.get_state()
         if current_state is None:
@@ -539,45 +487,8 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"❌ cancel_handler xatosi: {e}")
 
-@dp.message_handler(commands=['restart'])
-async def restart_handler(message: types.Message):
-    await send_welcome(message)
-
-@dp.message_handler(commands=['status'], user_id=ADMINS)
-async def check_status(message: types.Message):
-    try:
-        # Bot aktivligini tekshirish
-        me = await bot.get_me()
-        
-        # Google Sheets holati
-        gs_status = "✅ Ulangan" if gs_manager.connected else "❌ Ulanmagan"
-        
-        # Webhook holati
-        webhook_info = await bot.get_webhook_info()
-        
-        status_message = (
-            f"📊 <b>Bot Status Report</b>\n\n"
-            f"🤖 <b>Bot:</b> @{me.username}\n"
-            f"🆔 <b>ID:</b> {me.id}\n"
-            f"📅 <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"🔗 <b>Webhook:</b>\n"
-            f"• URL: {webhook_info.url[:50]}...\n"
-            f"• Pending updates: {webhook_info.pending_update_count}\n\n"
-            f"📊 <b>Google Sheets:</b> {gs_status}\n\n"
-            f"🔄 <b>Keep-Alive:</b> ✅ Faol\n"
-            f"⏰ <b>Pinglar:</b> Har 14 daqiqada\n\n"
-            f"🌐 <b>Health Check:</b>\n"
-            f"• {WEBHOOK_HOST}/health\n"
-            f"• {WEBHOOK_HOST}/sheet"
-        )
-        
-        await message.reply(status_message, parse_mode="HTML")
-        
-    except Exception as e:
-        await message.reply(f"❌ Status check xatosi: {str(e)}")
-
-@dp.message_handler(state='*')
 async def handle_all_messages(message: types.Message):
+    """Handle all messages"""
     try:
         current_state = await dp.current_state().get_state()
         if current_state:
@@ -590,24 +501,75 @@ async def handle_all_messages(message: types.Message):
     except Exception as e:
         logging.error(f"❌ handle_all_messages xatosi: {e}")
 
+# ======================= BOTNI ISHGA TUSHIRISH =======================
+async def setup_bot():
+    """Botni sozlash va ishga tushirish"""
+    global bot, dp, gs_manager
+    
+    logging.info("🤖 Bot sozlanmoqda...")
+    
+    # Bot obyektini yaratish
+    bot = Bot(token=API_TOKEN)
+    
+    # Dispatcher ni yaratish
+    storage = MemoryStorage()
+    dp = Dispatcher(bot, storage=storage)
+    
+    # Middleware qo'shish
+    dp.middleware.setup(LoggingMiddleware())
+    
+    # Google Sheets ni ishga tushirish
+    gs_manager = GoogleSheetsManager()
+    
+    # Handler'larni ro'yxatdan o'tkazish
+    dp.register_message_handler(send_welcome_handler, commands=['start', 'help'])
+    dp.register_message_handler(admin_panel_handler, commands=['admin'], user_id=ADMINS)
+    dp.register_message_handler(get_stats_handler, commands=['stats'], user_id=ADMINS)
+    dp.register_message_handler(get_users_handler, commands=['users'], user_id=ADMINS)
+    dp.register_message_handler(export_data_handler, commands=['export'], user_id=ADMINS)
+    dp.register_message_handler(cancel_handler, commands=['cancel'], state='*')
+    
+    # State handler'lar
+    dp.register_message_handler(process_name_handler, state=Register.name)
+    dp.register_message_handler(process_location_handler, state=Register.location)
+    dp.register_message_handler(process_phone_handler, content_types=['contact', 'text'], state=Register.phone)
+    
+    # Barcha xabarlar uchun handler
+    dp.register_message_handler(handle_all_messages, state='*')
+    
+    logging.info("✅ Bot muvaffaqiyatli sozlandi")
+    return bot, dp
+
 # ======================= WEBHOOK HANDLER =======================
 async def handle_webhook(request):
     """Webhook request handler for aiohttp"""
     try:
+        # Bot va dispatcher ni olish
+        global bot, dp
+        
+        if bot is None or dp is None:
+            logging.error("❌ Bot yoki Dispatcher ishga tushmagan!")
+            return web.Response(text="Bot not initialized", status=500)
+        
         # Telegram dan kelgan JSON ni o'qish
         update_json = await request.json()
+        
+        # Update ni yaratish
         update = types.Update(**update_json)
         
-        # Update ni Dispatcher ga uzatish
+        # Botni current qilish
+        Bot.set_current(bot)
+        
+        # Update ni qayta ishlash
         await dp.process_update(update)
         
         return web.Response(text="OK", status=200)
         
-    except exceptions.TelegramAPIError as e:
-        logging.error(f"Telegram API error: {e}")
-        return web.Response(text="Error", status=500)
+    except json.JSONDecodeError as e:
+        logging.error(f"❌ JSON decode error: {e}")
+        return web.Response(text="JSON Error", status=400)
     except Exception as e:
-        logging.error(f"Webhook processing error: {e}")
+        logging.error(f"❌ Webhook processing error: {e}")
         return web.Response(text="Error", status=500)
 
 # ======================= WEB SERVER =======================
@@ -617,58 +579,49 @@ async def health_check(request):
         return web.json_response({
             "status": "ok",
             "timestamp": datetime.now().isoformat(),
-            "google_sheets": gs_manager.connected,
-            "keep_alive": "active",
-            "render": "online"
+            "google_sheets": gs_manager.connected if gs_manager else False,
+            "bot": "running"
         })
     except Exception as e:
         logging.error(f"❌ health_check xatosi: {e}")
         return web.json_response({"status": "error", "message": str(e)}, status=500)
-
-async def sheet_info(request):
-    """Google Sheets info"""
-    try:
-        if gs_manager.connected and gs_manager.sheet:
-            return web.Response(
-                text=f'<h1>Google Sheets Status</h1>'
-                     f'<p>✅ Connected</p>'
-                     f'<p>Spreadsheet ID: {gs_manager.sheet.id}</p>'
-                     f'<p><a href="https://docs.google.com/spreadsheets/d/{gs_manager.sheet.id}" target="_blank">Open Spreadsheet</a></p>'
-                     f'<p>Keep-Alive: Active 24/7</p>'
-                     f'<p>Render: Running ✅</p>',
-                content_type='text/html'
-            )
-        return web.Response(text="Google Sheets ga ulanmagan")
-    except Exception as e:
-        logging.error(f"❌ sheet_info xatosi: {e}")
-        return web.Response(text=f"Xatolik: {str(e)}", status=500)
 
 async def root_handler(request):
     """Root endpoint"""
     return web.Response(
         text=f'<h1>Bot Status: Running ✅</h1>'
              f'<p>Timestamp: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>'
-             f'<p>Keep-Alive: Active 24/7 🔄</p>'
-             f'<p>Render Hosting: Active</p>'
-             f'<p><a href="/health">Health Check</a></p>'
-             f'<p><a href="/sheet">Google Sheets</a></p>',
+             f'<p>Bot: Active</p>'
+             f'<p>Google Sheets: {"✅ Connected" if gs_manager and gs_manager.connected else "❌ Not connected"}</p>'
+             f'<p><a href="/health">Health Check</a></p>',
         content_type='text/html'
     )
 
-# =================== ASYNC MAIN FUNKSIYASI ===================
-# =================== ASYNC MAIN FUNKSIYASI ===================
+# ======================= KEEP ALIVE =======================
+async def keep_alive_pinger():
+    """Simple keep-alive pinger"""
+    await asyncio.sleep(30)
+    
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(WEBHOOK_HOST, timeout=5) as response:
+                    logging.debug(f"✅ Keep-alive ping: {response.status}")
+        except Exception as e:
+            logging.debug(f"⚠️ Ping xatosi: {e}")
+        
+        await asyncio.sleep(300)  # 5 daqiqa
+
+# ======================= MAIN FUNKSIYA =======================
 async def main():
     """Asosiy ishga tushirish funksiyasi"""
-    logging.info("🤖 Bot ishga tushmoqda (Webhook + Keep-Alive rejimida)...")
-    logging.info(f"📡 Webhook URL: {WEBHOOK_URL}")
-    logging.info(f"🌐 Web server: {WEBAPP_HOST}:{WEBAPP_PORT}")
+    logging.info("🚀 Bot ishga tushmoqda...")
     
-    # BOT INSTANCE ni GLOBAL qilish - BU ASOSIY O'ZGARISH
-    Bot.set_current(bot)
-    dp.middleware.setup(LoggingMiddleware())
+    # Botni sozlash
+    bot, dp = await setup_bot()
     
     try:
-        # Avval webhook ni o'chirish
+        # Webhook ni o'chirish
         await bot.delete_webhook(drop_pending_updates=True)
         logging.info("✅ Eski webhook o'chirildi")
         await asyncio.sleep(2)
@@ -677,37 +630,19 @@ async def main():
         await bot.set_webhook(WEBHOOK_URL)
         logging.info(f"✅ Yangi webhook o'rnatildi: {WEBHOOK_URL}")
         
-        # Webhook ma'lumotlarini tekshirish
-        webhook_info = await bot.get_webhook_info()
-        logging.info(f"🔍 Webhook URL (tekshirish): {webhook_info.url}")
-        logging.info(f"🔍 Pending updates: {webhook_info.pending_update_count}")
-        
-        # Agar webhook noto'g'ri bo'lsa
-        if webhook_info.url != WEBHOOK_URL:
-            logging.error(f"❌ Webhook URL noto'g'ri! Kutilgan: {WEBHOOK_URL}, Holatda: {webhook_info.url}")
-            return
-        
     except Exception as e:
         logging.error(f"❌ Webhook o'rnatishda xato: {e}")
-        return
-    
-    # Maintainer task ni ishga tushirish
-    asyncio.create_task(bot_maintainer())
-    logging.info("✅ Bot maintainer ishga tushdi")
+        # Webhook o'rnatishda xatolik bo'lsa ham davom etish
     
     # Keep-alive task ni ishga tushirish
     asyncio.create_task(keep_alive_pinger())
-    logging.info("✅ Keep-alive ishga tushdi (Har 14 daqiqada ping)")
+    logging.info("✅ Keep-alive ishga tushdi")
     
     # Web app yaratish
     app = web.Application()
     app.router.add_get('/', root_handler)
     app.router.add_get('/health', health_check)
-    app.router.add_get('/sheet', sheet_info)
-    
-    # TUZATILGAN WEBHOOK HANDLER
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    logging.info(f"✅ Webhook handler qo'shildi: {WEBHOOK_PATH}")
     
     # Web serverni ishga tushirish
     runner = web.AppRunner(app)
@@ -716,16 +651,12 @@ async def main():
     await site.start()
     
     logging.info(f"🚀 Web server {WEBAPP_PORT} portda ishga tushdi")
-    logging.info("🔄 24/7 Keep-Alive: Har 14 daqiqada 2 ta ping yuboriladi")
-    
-    if not gs_manager.connected:
-        logging.warning("⚠️ Google Sheets ga ulanmagan! Ma'lumotlar faqat Telegramda saqlanadi.")
-    
     logging.info("✅ Bot to'liq ishga tushdi va xabarlarni kutmoqda...")
     
     # Cheksiz kutish
     await asyncio.Event().wait()
-# =================== ENTRY POINT ===================
+
+# ======================= START =======================
 if __name__ == "__main__":
     try:
         asyncio.run(main())
