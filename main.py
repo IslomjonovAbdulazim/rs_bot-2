@@ -14,7 +14,12 @@ from aiohttp import web
 import aiohttp
 
 # ================== CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN":
+    logging.error("❌ BOT_TOKEN is missing or invalid! Please set it in your environment variables.")
+    # Exit or handle gracefully - for a bot, we can't continue without a token
+    import sys
+    sys.exit(1)
 
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"

@@ -3,10 +3,10 @@ services:
     name: telegram-bot
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python bot.py
+    startCommand: python main.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.9.0
     autoDeploy: true
     plan: free
-    healthCheckPath: /health
+    healthCheckPath: /
