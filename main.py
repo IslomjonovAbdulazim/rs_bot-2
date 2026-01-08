@@ -16,7 +16,7 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiohttp import web
 import aiohttp
 import gspread
-from data import GOOGLE_CREDENTIALS, CREDENTIALS_FILE, SPREADSHEET_NAME
+from data import GOOGLE_CREDENTIALS, CREDENTIALS_FILE, SPREADSHEET_NAME, ADMINS
 
 # ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -59,60 +59,115 @@ def toshkent_tumanlari():
 # ================== HANDLERS ==================
 async def start_handler(message: types.Message, state: FSMContext):
     await state.finish()
-    await message.answer("👋 Assalomu alaykum!\n\nIsmingizni kiriting:")
+    await message.reply(
+        f"Assalomu Alaykum, <b>{message.from_user.full_name} 😊</b>\n\n"
+        "Autizm haqidagi qo'llanmani olish uchun 3 qadam qoldi 🤩 \n\n1-qadam: \n"
+        "📝 Ismingizni kiriting:",
+        parse_mode="HTML"
+    )
     await Register.name.set()
 
 async def process_name(message: types.Message, state: FSMContext):
-    if not message.text.isalpha():
-        await message.answer("❌ Ism faqat harflardan iborat bo‘lsin")
-        return
-
     await state.update_data(name=message.text)
     await Register.location.set()
 
-    await message.answer(
-        "📍 Toshkent shahrining qaysi tumanida yashaysiz?",
+    await message.reply(
+        "📍Toshkent shahrining qaysi tumanida yashaysiz?",
         reply_markup=toshkent_tumanlari()
     )
 
 async def process_location(message: types.Message, state: FSMContext):
-    await state.update_data(location=message.text)
+    location = message.text
+    await state.update_data(location=location)
     await Register.phone.set()
-
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("📱 Telefon yuborish", request_contact=True))
-
-    await message.answer(
-        "📞 Telefon raqamingizni yuboring:",
-        reply_markup=kb
+    
+    contact_button = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    contact_button.add(types.KeyboardButton("📱 Telefon raqamini yuborish", request_contact=True))
+    contact_button.add(types.KeyboardButton("✏️  Raqamni qo'lda kiritish"))
+    
+    await message.reply(
+        "2-qadam: \n\n 📱Telefon raqamingizni kiriting:\n\n"
+        "📱 Telefon raqamini yuborish tugmasini bosing yoki\n"
+        "Namuna: 901234567",
+        reply_markup=contact_button
     )
 
 async def process_phone(message: types.Message, state: FSMContext):
+    phone = ""
     if message.contact:
         phone = message.contact.phone_number
     else:
-        digits = re.sub(r"\D", "", message.text)
-        if len(digits) != 9:
-            await message.answer("❌ Raqam noto‘g‘ri")
+        phone = message.text
+        if phone == "✏️  Raqamni qo'lda kiritish":
+            await message.reply(
+                "Telefon raqamingizni kiriting:\nNamuna: 901234567",
+                reply_markup=types.ReplyKeyboardRemove()
+            )
             return
-        phone = "+998" + digits
-
+        phone_digits = re.sub(r'\D', '', phone)
+        if len(phone_digits) == 9:
+            phone = f"+998{phone_digits}"
+        elif len(phone_digits) == 12 and phone_digits.startswith('998'):
+            phone = f"+{phone_digits}"
+        elif len(phone_digits) == 13 and phone.startswith('+'):
+            phone = f"+{phone_digits}"
+        elif len(phone_digits) == 10 and phone_digits.startswith('8'):
+            phone = f"+7{phone_digits[1:]}"
+        else:
+            await message.reply(
+                "❌ Noto'g'ri telefon raqami formati!\n"
+                "✅ Qabul qilinadigan formatlar:\n"
+                "• 901234567\n"
+                "• +998901234567\n"
+                "• 998901234567"
+            )
+            return
+    
     data = await state.get_data()
+    user_name = data.get('name')
+    location = data.get('location')
 
     save_to_sheets({
-        "Ism": data["name"],
-        "Tuman": data["location"],
+        "Ism": user_name,
+        "Tuman": location,
         "Telefon": phone,
         "User ID": message.from_user.id,
+        "To'liq ism": message.from_user.full_name,
         "Vaqt": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     })
 
+    # Adminga habar
+    admin_message = (
+        f"🎯 <b>Qaytadan ro'yxatdan o'tish:</b>\n\n"
+        f"👤 <b>Ism:</b> {user_name}\n"
+        f"📍 <b>Tuman:</b> {location}\n"
+        f"📱 <b>Telefon:</b> {phone}\n"
+        f"🆔 <b>User ID:</b> {message.from_user.id}\n"
+        f"📛 <b>To'liq ism:</b> {message.from_user.full_name}\n"
+        f"📅 <b>Vaqt:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"#yangi_royhat"
+    )
+    
+    for admin_id in ADMINS:
+        try:
+            await bot.send_message(admin_id, admin_message, parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Error sending message to admin {admin_id}: {e}")
+
     await state.finish()
 
-    await message.answer(
-        "✅ Ro‘yxatdan o‘tdingiz!",
+    await message.reply(
+        "Siz muvaffaqiyatli ro'yxatdan o'tdingiz 🎉 \n\n📚Marhamat, autizm haqidagi maxsus qo'llanma:",
         reply_markup=types.ReplyKeyboardRemove()
     )
+    
+    # Fayl yuborish
+    try:
+        with open("Autizm.pdf", "rb") as file:
+            await message.reply_document(file)
+    except Exception as e:
+        logging.error(f"Error sending PDF: {e}")
+        await message.answer("Kechirasiz, qo'llanmani yuborishda xatolik yuz berdi admin bilan bog'laning.")
 
 # ================== GOOGLE SHEETS ==================
 def save_to_sheets(row_data: dict):
