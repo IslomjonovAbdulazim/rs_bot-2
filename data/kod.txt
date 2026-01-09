@@ -3,9 +3,10 @@ import logging
 import os
 import re
 from datetime import datetime
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
-load_dotenv()
+# # .env faylini yuklash
+# load_dotenv()
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
@@ -19,11 +20,14 @@ import gspread
 from data import GOOGLE_CREDENTIALS, CREDENTIALS_FILE, SPREADSHEET_NAME, ADMINS
 
 # ================== CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN":
-    logging.error("❌ BOT_TOKEN is missing or invalid! Please set it in your environment variables.")
-    import sys
-    sys.exit(1)
+BOT_TOKEN = "8272384367:AAFnj_ut2MmHKj_cncodcP__9oo4DEsbEu8"
+
+# Yoki muhit o'zgaruvchisidan olish uchun:
+# BOT_TOKEN = os.getenv("BOT_TOKEN")
+# if not BOT_TOKEN:
+#     logging.error("❌ BOT_TOKEN topilmadi!")
+#     import sys
+#     sys.exit(1)
 
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
@@ -52,7 +56,7 @@ def toshkent_tumanlari():
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(
         "Yunusobod", "Chilonzor",
-        "Mirzo Ulug‘bek", "Yakkasaroy",
+        "Mirzo Ulug'bek", "Yakkasaroy",
         "Shayxontohur", "Olmazor",
         "Sergeli", "Uchtepa",
         "Bektemir", "Mirobod"
@@ -64,6 +68,8 @@ def admin_panel():
     kb.add("📊 Statistika")
     kb.add("📝 Foydalanuvchilar ro'yxati", "🔙 Orqaga")
     return kb
+
+
 
 # ================== ADMIN HANDLERS ==================
 async def admin_command(message: types.Message):
@@ -99,9 +105,8 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
         try:
             users = get_all_users()
             if users:
-                unknown = "Noma'lum"
                 user_list = "\n".join([
-                    f"{i+1}. {u.get('Ism', unknown)} - {u.get('Telefon', unknown)} ({u.get('Tuman', unknown)})" 
+                    f"{i+1}. {u['Ism']} - {u['Telefon']} ({u['Tuman']})" 
                     for i, u in enumerate(users[:20])
                 ])
                 await message.reply(
@@ -117,6 +122,8 @@ async def admin_menu_handler(message: types.Message, state: FSMContext):
     elif message.text == "🔙 Orqaga":
         await state.finish()
         await message.reply("Bosh menyu", reply_markup=types.ReplyKeyboardRemove())
+
+
 
 async def broadcast_confirm_handler(message: types.Message, state: FSMContext):
     if message.text == "✅ Ha, yuborish":
@@ -139,7 +146,7 @@ async def broadcast_confirm_handler(message: types.Message, state: FSMContext):
                         await asyncio.sleep(0.05)  # Spam oldini olish
                 except Exception as e:
                     failed += 1
-                    logging.error(f"Broadcast error for user {user.get('User ID')}: {e}")
+                    logging.error(f"Broadcast error for user {user_id}: {e}")
             
             await message.reply(
                 f"✅ <b>Xabar yuborish yakunlandi!</b>\n\n"
@@ -197,7 +204,7 @@ async def process_location(message: types.Message, state: FSMContext):
     
     await message.reply(
         "2-qadam: \n\n 📱Telefon raqamingizni kiriting:\n\n"
-        "📱 Telefon raqamini yuborish tugmasini bosing yoki\n"
+        
         "Namuna: 901234567",
         reply_markup=contact_button
     )
@@ -280,16 +287,17 @@ async def process_phone(message: types.Message, state: FSMContext):
     
     # 2. Keyin xabarni yuborish
     await message.answer(
-        "🎉 Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\n"
-        "📚 Marhamat, autizm haqidagi maxsus qo'llanma\n\n"
-        "🔔 Bizni ijtimoiy tarmoqlarda kuzatib boring:\n\n"
-        "<a href='https://t.me/rahimovkids'>Telegram</a> | "
-        "<a href='https://instagram.com/rahimovkids'>Instagram</a> | "
-        "<a href='https://youtube.com/@RahimovKids'>YouTube</a> | "
-        "<a href='https://www.rahimovkids.uz/'>Veb-sayt</a>",
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    "🎉 Siz muvaffaqiyatli ro'yxatdan o'tdingiz!\n\n"
+    "📚 Marhamat, autizm haqidagi maxsus qo'llanma\n\n"
+    "🔔 Bizni ijtimoiy tarmoqlarda kuzatib boring:\n\n"
+    "<a href='https://t.me/rahimovkids'>Telegram</a> | "
+    "<a href='https://instagram.com/rahimovkids'>Instagram</a> | "
+    "<a href='https://youtube.com/@RahimovKids'>YouTube</a> | "
+    "<a href='https://www.rahimovkids.uz/'>Veb-sayt</a>",
+    parse_mode="HTML",
+    disable_web_page_preview=True
+)
+
 
 # ================== GOOGLE SHEETS ==================
 def save_to_sheets(row_data: dict):
